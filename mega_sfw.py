@@ -3,9 +3,7 @@ from storage_db import Storage
 
 def normalize(v):
     """统一转成可比较的 Python 值"""
-    if isinstance(v, bytes):
-        return v.decode("utf-8").strip()
-    return v
+    return str(v).strip()
 
 
 def convert_value(value, field_type):
@@ -46,9 +44,6 @@ def process_sfw(sql):
     # --------------------
     # 解析 columns
     # --------------------
-
-
-
     if select_part == "*":
         columns = None
 
@@ -66,8 +61,6 @@ def process_sfw(sql):
             if c:
                 columns.append(c)
 
-    # columns = None if select_part == "*" else [c.strip() for c in select_part.split(",")]
-
     # --------------------
     # 解析 table / where
     # --------------------
@@ -81,9 +74,6 @@ def process_sfw(sql):
         table_name = rest_part.strip()
         where_part = None
 
-    if isinstance(table_name, str):
-        table_name = table_name.encode("utf-8")
-
     # --------------------
     # 读取数据
     # --------------------
@@ -91,10 +81,10 @@ def process_sfw(sql):
     records = storage.get_valid_records()
     fields = storage.getFieldList()
 
-    field_names = [f[0].decode("utf-8").strip() for f in fields]
+    field_names = [f[0].strip() for f in fields]
 
     # --------------------
-    # WHERE 处理（升级版）
+    # WHERE 处理
     # --------------------
     if where_part:
 

@@ -13,9 +13,9 @@ class Header(object):
     #------------------------
     # constructor of the class
     # input
-    #   nameList    : table name list and each element of the list is a triple (table_name,num_of_fields, offset_in_body)
-    #   fieldDict   : field dictionary for all tables and each element is (tablename, fieldList) where fieldList is
-    #                    a list of fields and each field is a tuple(fieldname,fieldtype,fieldlength
+    #   nameList    : list of triples (table_name(str), num_of_fields(int), offset_in_body(int))
+    #   fieldDict   : dict {table_name(str): [(field_name(str), field_type(int), field_length(int)), ...]}
+    #   inistored   : bool, whether schema data exists
     #   inLen       : number of tables
     #   off         : where the free space begins in body of the schema file
     #---------------------------------------------------------------
@@ -48,4 +48,6 @@ class Header(object):
             print ("the length of tableNames is",len(self.tableNames))
             for i in range(len(self.tableNames)):
                 print(self.tableNames[i])
-                print (self.tableFields[i])
+                table_name = self.tableNames[i][0]
+                if table_name in self.tableFields:
+                    print(self.tableFields[table_name])

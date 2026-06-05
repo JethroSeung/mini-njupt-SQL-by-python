@@ -44,12 +44,10 @@ def main():
     while True:
 
         if choice == '1':  # add a new table and lines of data
-            tableName = input('please enter your new table name:')
-            if isinstance(tableName, str):
-                tableName = tableName.encode('utf-8')
+            tableName = input('please enter your new table name:').strip()
             #  tableName not in all.sch
             insertFieldList = []
-            if tableName.strip() not in schemaObj.get_table_name_list():
+            if tableName not in schemaObj.get_table_name_list():
                 # Create a new table
                 dataObj = storage_db.Storage(tableName)
 
@@ -59,7 +57,6 @@ def main():
             else:
                 dataObj = storage_db.Storage(tableName)
 
-                # to the students: The following needs to be further implemented (many lines can be added)
                 record = []
                 Field_List = dataObj.getFieldList()
                 for x in Field_List:
@@ -82,14 +79,12 @@ def main():
 
         elif choice == '2':  # delete a table from schema file and data file
 
-            table_name = input('please input the name of the table to be deleted:')
-            if isinstance(table_name,str):
-                table_name=table_name.encode('utf-8')
-            if schemaObj.find_table(table_name.strip()):
+            table_name = input('please input the name of the table to be deleted:').strip()
+            if schemaObj.find_table(table_name):
                 if schemaObj.delete_table_schema(
                         table_name):  # delete the schema from the schema file
                     dataObj = storage_db.Storage(table_name)  # create an object for the data of table
-                    dataObj.delete_table_data(table_name.strip())  # delete table content from the table file
+                    dataObj.delete_table_data(table_name)  # delete table content from the table file
                     del dataObj
 
                 else:
@@ -97,7 +92,7 @@ def main():
 
 
             else:
-                print('there is no table '.encode('utf-8') + table_name + ' in the schema file'.encode('utf-8'))
+                print('there is no table ' + table_name + ' in the schema file')
 
 
             choice = input(PROMPT_STR)
@@ -107,11 +102,9 @@ def main():
         elif choice == '3':  # view the table structure and all the data
 
             print(schemaObj.headObj.tableNames)
-            table_name = input('please input the name of the table to be displayed:')
-            if isinstance(table_name,str):
-                table_name=table_name.encode('utf-8')
-            if table_name.strip():    #表名不为空
-                if schemaObj.find_table(table_name.strip()):
+            table_name = input('please input the name of the table to be displayed:').strip()
+            if table_name:    #表名不为空
+                if schemaObj.find_table(table_name):
                     schemaObj.viewTableStructure(table_name)  # to be implemented
 
                     dataObj = storage_db.Storage(table_name)  # create an object for the data of table
@@ -126,23 +119,17 @@ def main():
 
         elif choice == '4':  # delete all the table structures and their data
 
-            import os
-
             table_name_list = list(schemaObj.get_table_name_list())
 
             for table_name in table_name_list:
 
-                # 统一为 bytes
-                if isinstance(table_name, str):
-                    table_name = table_name.encode('utf-8')
-
-                file_path = table_name.strip() + b'.dat'
+                file_path = table_name.strip() + '.dat'
 
                 if os.path.exists(file_path):
                     os.remove(file_path)
-                    print(b'Deleted file: ' + file_path)
+                    print('Deleted file: ' + file_path)
                 else:
-                    print(b'File not found: ' + file_path)
+                    print('File not found: ' + file_path)
 
             # 删除 schema
             schemaObj.deleteAll()
@@ -150,21 +137,6 @@ def main():
             print("All tables and data have been deleted.")
 
             choice = input(PROMPT_STR)
-        # elif choice == '4':  # delete all the table structures and their data
-        #     table_name_list = list(schemaObj.get_table_name_list())
-        #     # to be inserted here -> to delete from data files
-        #     for i in range(len(table_name_list)):
-        #         table_name = table_name_list[i]
-        #         table_name.strip()
-        #
-        #         if table_name:
-        #             stObj = storage_db.Storage(table_name)
-        #             stObj.delete_table_data(table_name.strip())  # delete table data
-        #             del stObj
-        #
-        #     schemaObj.deleteAll()  # delete schema from schema file
-        #
-        #     choice = input(PROMPT_STR)
 
 
         elif choice == '5':  # process SELECT FROM WHERE clause
@@ -174,36 +146,13 @@ def main():
                 mega_sfw.process_sfw(sql_str)
             except Exception:
                 print('WRONG SQL INPUT!')
-            # lex_db.set_lex_handle()  # to set the global_lexer in common_db.py
-            # parser_db.set_handle()  # to set the global_parser in common_db.py
-            #
-            # try:
-            #     common_db.global_syn_tree = common_db.global_parser.parse(sql_str.strip(),
-            #                                                               lexer=common_db.global_lexer)  # construct the global_syn_tree
-            #     #reload(query_plan_db)
-            #     query_plan_db.construct_logical_tree()
-            #     query_plan_db.execute_logical_tree()
-            # except:
-            #     print('WRONG SQL INPUT!')
-            # print('#----------------------------------------------------#')
             choice = input(PROMPT_STR)
 
 
-        # elif choice == '6':  # delete a line of data from the storage file given the keyword
-        #
-        #     table_name = input('please input the name of the table to be deleted from:')
-        #     field_name = input('please input the field name and the corresponding keyword (fieldname:keyword):')
-        #     # to the students: to be inserted here, delete the line from data files
-        #
-        #     choice = input(PROMPT_STR)
-
         elif choice == '6':  # delete a line
 
-            table_name = input('please input the name of the table to be deleted from:')
+            table_name = input('please input the name of the table to be deleted from:').strip()
             field_input = input('please input (fieldname=value):')
-
-            if isinstance(table_name, str):
-                table_name = table_name.encode('utf-8')
 
             if '=' not in field_input:
                 print('Wrong format! Use field=value')
@@ -218,15 +167,6 @@ def main():
 
             choice = input(PROMPT_STR)
 
-        # elif choice == '7':  # update a line of data given the keyword
-        #
-        #     table_name = input('please input the name of the table:')
-        #     field_name = input('please input the field name:')
-        #     field_name_value = input('please input the old value of the field:')
-        #     # to the students: to be inserted here, update the line according to the user input
-        #
-        #     choice = input(PROMPT_STR)
-
         elif choice == '7':  # update
 
             print("---- UPDATE ----")
@@ -237,9 +177,9 @@ def main():
                 print("Invalid table name")
                 continue
 
-            dataObj = storage_db.Storage(table_name.encode())
+            dataObj = storage_db.Storage(table_name)
 
-            field_names = [f[0].decode().strip() for f in dataObj.getFieldList()]
+            field_names = [f[0].strip() for f in dataObj.getFieldList()]
 
             print("Available fields:", field_names)
 
@@ -262,42 +202,6 @@ def main():
             del dataObj
 
             choice = input(PROMPT_STR)
-
-        # elif choice == '7':  # update
-        #
-        #     table_name = input('please input the name of the table:')
-        #     field = input('please input the field name (for condition):')
-        #     old_value = input('please input the old value:')
-        #
-        #     if isinstance(table_name, str):
-        #         table_name = table_name.encode('utf-8')
-        #
-        #     dataObj = storage_db.Storage(table_name)
-        #
-        #     # 先删除
-        #     dataObj.delete_by_condition(field, old_value)
-        #
-        #     print('Now insert new record:')
-        #
-        #     # 再插入
-        #     record = []
-        #     Field_List = dataObj.getFieldList()
-        #
-        #     for x in Field_List:
-        #         s = 'Input field name is: ' + str(x[0].strip()) + \
-        #             '  field type is: ' + str(x[1]) + \
-        #             ' field maximum length is: ' + str(x[2]) + '\n'
-        #         record.append(input(s))
-        #
-        #     if dataObj.insert_record(record):
-        #         print('Update OK!')
-        #     else:
-        #         print('Update failed!')
-        #
-        #     del dataObj
-        #
-        #     choice = input(PROMPT_STR)
-
 
 
         elif choice == '.':

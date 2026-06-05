@@ -4,37 +4,45 @@ import os
 import ctypes
 
 
+def _pad_name(name, max_len=10):
+    """right-justify a name string with leading spaces to max_len"""
+    name = name.strip()
+    if len(name) < max_len:
+        name = ' ' * (max_len - len(name)) + name
+    return name
+
+
 class Storage(object):
 
     def __init__(self, tablename, skip_init=False):
         """
         input:
-            tablename: table name, bytes or str
+            tablename: str, table name
             skip_init: when True, do not ask user to create schema if file is empty
         output:
             none
         function:
             load table data from tablename.dat, and keep schema/data in memory
         """
-        if isinstance(tablename, str):
-            tablename = tablename.encode('utf-8')
+        if isinstance(tablename, bytes):
+            tablename = tablename.decode('utf-8')
         tablename = tablename.strip()
 
         self.record_list = []
         self.record_Position = []
         self.deleted_flags = []
-        self.field_name_list = []
+        self.field_name_list = []  # each element is (field_name(str), field_type(int), field_length(int))
         self.open = False
 
-        file_path = tablename + b'.dat'
+        file_path = tablename + '.dat'
 
         if not os.path.exists(file_path):
-            print(b'table file ' + tablename + b'.dat does not exists')
+            print('table file ' + tablename + '.dat does not exists')
             f = open(file_path, 'wb+')
             f.close()
 
         self.f_handle = open(file_path, 'rb+')
-        print(b'table file ' + tablename + b'.dat has been opened')
+        print('table file ' + tablename + '.dat has been opened')
         self.open = True
 
         self.f_handle.seek(0, os.SEEK_END)
@@ -61,19 +69,13 @@ class Storage(object):
             offset = struct.calcsize('!iii')
 
             for i in range(self.num_of_fields):
-                name = input(f"field {i} name: ")
-                if len(name) < 10:
-                    name = ' ' * (10 - len(name)) + name
-
+                name = input(f"field {i} name: ").strip()
                 ftype = int(input("type(0 str,1 varstr,2 int,3 bool): "))
                 flen = int(input("length: "))
 
-                if isinstance(name, str):
-                    name_bytes = name.encode('utf-8')
-                else:
-                    name_bytes = name
-
-                self.field_name_list.append((name_bytes, ftype, flen))
+                # store as str in memory, encode just before pack
+                self.field_name_list.append((name, ftype, flen))
+                name_bytes = _pad_name(name).encode('utf-8')
                 struct.pack_into('!10sii', self.dir_buf, offset, name_bytes, ftype, flen)
                 offset += struct.calcsize('!10sii')
 
@@ -96,8 +98,10 @@ class Storage(object):
 
             offset = struct.calcsize('!iii')
             for i in range(self.num_of_fields):
-                field = struct.unpack_from('!10sii', self.dir_buf, offset + i * struct.calcsize('!10sii'))
-                self.field_name_list.append(field)
+                field_bytes, ftype, flen = struct.unpack_from('!10sii', self.dir_buf, offset + i * struct.calcsize('!10sii'))
+                # decode to str immediately after unpack
+                fname = field_bytes.decode('utf-8').strip()
+                self.field_name_list.append((fname, ftype, flen))
 
         # ------------------------------
         # 读取数据块
@@ -143,8 +147,12 @@ class Storage(object):
                     row = []
 
                     for field in self.field_name_list:
-                        val = content[tmp:tmp + field[2]].strip()
+                        val = content[tmp:tmp + field[2]]
                         tmp += field[2]
+
+                        # decode bytes to str immediately
+                        if isinstance(val, bytes):
+                            val = val.decode('utf-8', errors='ignore').strip()
 
                         if field[1] == 2:
                             try:
@@ -152,8 +160,6 @@ class Storage(object):
                             except Exception:
                                 val = 0
                         elif field[1] == 3:
-                            if isinstance(val, bytes):
-                                val = val.decode('utf-8', errors='ignore')
                             val = str(val).strip().lower() in ('1', 'true', 't', 'yes', 'y')
 
                         row.append(val)
@@ -162,14 +168,10 @@ class Storage(object):
 
     @staticmethod
     def _to_text(value):
-        if isinstance(value, bytes):
-            return value.decode('utf-8', errors='ignore')
         return str(value)
 
     @staticmethod
     def _to_bool(value):
-        if isinstance(value, bytes):
-            value = value.decode('utf-8', errors='ignore')
         return str(value).strip().lower() in ('1', 'true', 't', 'yes', 'y')
 
     # ------------------------------
@@ -276,19 +278,19 @@ class Storage(object):
 
         return True
 
-    # ------------------------------全新的删除函数
+    # ------------------------------
     def delete_by_condition(self, field_name, value):
         """
         input:
-            field_name: condition field name
-            value: field value
+            field_name: str, condition field name
+            value: str, field value
         output:
             none
         function:
             mark matched rows deleted in memory, then persist the live rows back to disk
         """
         field_name = field_name.strip()
-        field_names = [f[0].decode('utf-8', errors='ignore').strip() for f in self.field_name_list]
+        field_names = [f[0].strip() for f in self.field_name_list]
 
         if field_name not in field_names:
             print('Field not found!')
@@ -303,63 +305,18 @@ class Storage(object):
                 continue
 
             cell = record[field_index]
-            if isinstance(cell, bytes):
-                cell = cell.decode('utf-8', errors='ignore').strip()
-
             if str(cell) == value:
                 self.deleted_flags[i] = True
                 deleted_count += 1
 
         print(f'{deleted_count} row(s) deleted.')
 
-        # ⭐ 关键：持久化
         if deleted_count > 0:
             self.persist_records()
 
-    # def delete_by_condition(self, field_name, value):
-    #
-    #     field_name = field_name.strip()
-    #     names = [f[0].decode().strip() for f in self.field_name_list]
-    #
-    #     if field_name not in names:
-    #         print("Field not found")
-    #         return
-    #
-    #     idx = names.index(field_name)
-    #
-    #     count = 0
-    #
-    #     for i, r in enumerate(self.record_list):
-    #
-    #         if self.deleted_flags[i]:
-    #             continue
-    #
-    #         if str(r[idx]) == value:
-    #
-    #             blk, rid = self.record_Position[i]
-    #
-    #             self.f_handle.seek(BLOCK_SIZE * blk)
-    #             buf = self.f_handle.read(BLOCK_SIZE)
-    #
-    #             offset = struct.unpack_from(
-    #                 '!i',
-    #                 buf,
-    #                 struct.calcsize('!ii') + rid * 4
-    #             )[0]
-    #
-    #             # 写 is_deleted=True
-    #             self.f_handle.seek(BLOCK_SIZE * blk + offset)
-    #             self.f_handle.write(struct.pack('!?', True))
-    #             self.f_handle.flush()
-    #
-    #             self.deleted_flags[i] = True
-    #             count += 1
-    #
-    #     print(f"{count} row(s) deleted.")
-
     # ------------------------------
     def show_table_data(self):
-        print('| '.join(self._to_text(f[0]).strip() for f in self.field_name_list))
+        print('  |  '.join(f[0].strip() for f in self.field_name_list))
 
         for i, r in enumerate(self.record_list):
             if not self.deleted_flags[i]:
@@ -425,10 +382,9 @@ class Storage(object):
 
         offset = struct.calcsize('!iii')
         for f in self.field_name_list:
-            field_name = f[0]
-            if isinstance(field_name, str):
-                field_name = field_name.encode('utf-8')
-            struct.pack_into('!10sii', header_buf, offset, field_name, int(f[1]), int(f[2]))
+            # encode to bytes just before pack
+            field_name_bytes = _pad_name(f[0]).encode('utf-8')
+            struct.pack_into('!10sii', header_buf, offset, field_name_bytes, int(f[1]), int(f[2]))
             offset += struct.calcsize('!10sii')
 
         self.f_handle.seek(0)
@@ -439,8 +395,6 @@ class Storage(object):
         for record in valid_records:
             insert_record = []
             for val in record:
-                if isinstance(val, bytes):
-                    val = val.decode('utf-8', errors='ignore')
                 insert_record.append(str(val))
             self.insert_record(insert_record)
 
@@ -448,10 +402,10 @@ class Storage(object):
     def update_by_condition(self, cond_field, cond_value, target_field, new_value):
         """
         input:
-            cond_field: condition field name
-            cond_value: condition value
-            target_field: field to be updated
-            new_value: new value for target field
+            cond_field: str, condition field name
+            cond_value: str, condition value
+            target_field: str, field to be updated
+            new_value: str, new value for target field
         output:
             none
         function:
@@ -461,7 +415,7 @@ class Storage(object):
             new rows after the scan finishes.
         """
 
-        field_names = [f[0].decode('utf-8').strip() for f in self.field_name_list]
+        field_names = [f[0].strip() for f in self.field_name_list]
 
         if cond_field not in field_names:
             print("Condition field not found!")
@@ -480,7 +434,7 @@ class Storage(object):
         cond_value = str(cond_value).strip().strip('"').strip("'")
         new_value = str(new_value).strip().strip('"').strip("'")
 
-        # ⭐ 长度检查（字符串字段）
+        # 长度检查（字符串字段）
         if target_field_type in [0, 1]:
             if len(new_value) > target_field_len:
                 print("Value too long!")
@@ -497,14 +451,11 @@ class Storage(object):
             record = self.record_list[i]
             cell = record[cond_idx]
 
-            if isinstance(cell, bytes):
-                cell = cell.decode('utf-8', errors='ignore').strip()
-
             if str(cell) == cond_value:
 
                 new_record = list(record)
 
-                # ⭐ 类型感知更新
+                # 类型感知更新
                 if target_field_type == 2:  # int
                     try:
                         new_record[target_idx] = int(new_value)
