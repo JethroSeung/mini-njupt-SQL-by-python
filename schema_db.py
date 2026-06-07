@@ -3,15 +3,45 @@
 # author: Jingyu Han   hjymail@163.com
 # modified by: Ning wang, Yidan Xu
 #-----------------------------------------------
-# to process the schema data, which is stored in all.sch
-# all.sch are divied into three parts,namely metaHead, tableNameHead and body
-# metaHead|tableNameHead|body
+#
+# 表模式(Schema)的磁盘存储与内存管理
+#
+# 整体逻辑:
+#   all.sch 文件存储所有表的模式信息，分为三段：
+#     metaHead     (12字节)  : 是否有数据、表数量、body空闲偏移
+#     tableNameHead (固定大小): 每个表的(表名, 字段数, body偏移)
+#     body          (固定大小): 每个表的字段信息(字段名, 类型, 长度)
+#
+#   Schema 类负责 all.sch 的读写，并维护 Header 内存缓存。
+#   采用 lazy write 策略：增删操作只改内存，标脏后延迟到程序退出时写盘。
+#
+# 函数分工:
+#   __init__            - 读取 all.sch，构建 Header 内存缓存
+#   __del__             - 程序退出时，若缓存脏则调 WriteBuff 写盘
+#   appendTable         - 新增一张表的模式（只改内存，标脏）
+#   delete_table_schema - 删除一张表的模式（只改内存，标脏）
+#   deleteAll           - 清空所有表模式（只改内存，标脏）
+#   find_table          - 查询某表是否存在
+#   get_table_name_list - 返回所有表名列表
+#   viewTableStructure  - 显示指定表的字段结构
+#   viewTableNames      - 显示所有表名
+#   WriteBuff           - 将 Header 内存数据全量写回 all.sch
+#
+# 编码策略:
+#   内存中统一使用 str，仅在 struct.pack 前编码为 bytes，
+#   在 struct.unpack 后立即解码为 str。
 #-------------------------------------------
-
 
 import ctypes
 import struct
 import head_db # it is main memory structure for the table schema
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
 
 
 
@@ -23,7 +53,7 @@ isStored    # whether there is data in the all.sch
 tableNum    # how many tables
 offset      # where the free area begins for body.
 """
-META_HEAD_SIZE=12                                           #the First part in the schema file
+META_HEAD_SIZE=12                                           # metaHead 固定 12 字节
 
 
 #the following is the structure of tableNameHead
@@ -31,10 +61,10 @@ META_HEAD_SIZE=12                                           #the First part in t
 tablename|numofFeilds|beginOffsetInBody|....|tablename|numofFeilds|beginOffsetInBody|
 10 bytes |4 bytes    |4 bytes
 """
-MAX_TABLE_NAME_LEN=10                                       # the maximum length of table name
-MAX_TABLE_NUM=100                                           # the maximum number of tables in the all.sch
-TABLE_NAME_ENTRY_LEN=MAX_TABLE_NAME_LEN+4+4                 # the length of one table name entry
-TABLE_NAME_HEAD_SIZE=MAX_TABLE_NUM*TABLE_NAME_ENTRY_LEN     # the SECOND part in the schema file
+MAX_TABLE_NAME_LEN=10                                       # 表名最大长度
+MAX_TABLE_NUM=100                                           # 最大表数量
+TABLE_NAME_ENTRY_LEN=MAX_TABLE_NAME_LEN+4+4                 # 每个表名条目的长度: 10+4+4=18
+TABLE_NAME_HEAD_SIZE=MAX_TABLE_NUM*TABLE_NAME_ENTRY_LEN     # tableNameHead 总大小
 
 
 
@@ -44,23 +74,21 @@ field_name   # it is a string
 field_type   # it is an integer, 0->str,1->varstr,2->int,3->bool
 field_length # it is an integer
 """
-MAX_FIELD_NAME_LEN=10                                       # the maximum length of field name
-MAX_FIELD_LEN=10+4+4                                         #  the maximum length of one field
-MAX_NUM_OF_FIELD_PER_TABLE=5                                # the maximum number of fields in one table
+MAX_FIELD_NAME_LEN=10                                       # 字段名最大长度
+MAX_FIELD_LEN=10+4+4                                         # 每个字段条目的长度: 10+4+4=18
+MAX_NUM_OF_FIELD_PER_TABLE=5                                # 每张表最大字段数
 FIELD_ENTRY_SIZE_PER_TABLE=MAX_FIELD_LEN*MAX_NUM_OF_FIELD_PER_TABLE
-MAX_FIELD_SECTION_SIZE=FIELD_ENTRY_SIZE_PER_TABLE*MAX_TABLE_NUM #the THIRD part in the schema file
+MAX_FIELD_SECTION_SIZE=FIELD_ENTRY_SIZE_PER_TABLE*MAX_TABLE_NUM # body 总大小
 
 
 
-BODY_BEGIN_INDEX=META_HEAD_SIZE+TABLE_NAME_HEAD_SIZE            # Intitially, where the field name, type and length are stored
+BODY_BEGIN_INDEX=META_HEAD_SIZE+TABLE_NAME_HEAD_SIZE            # body 区域在文件中的起始偏移
 
 
 # -----------------------------
-# pad table name with leading spaces to MAX_TABLE_NAME_LEN
-# input:
-#       tableName: str, the table name
-# output:
-#       str, the padded table name (right-justified to 10 chars)
+# 将表名右对齐填充到 MAX_TABLE_NAME_LEN 长度
+# input:  tableName (str)
+# output: 填充后的表名 (str)
 # -------------------------------
 def fillTableName(tableName):
     tableName = tableName.strip()
@@ -82,17 +110,15 @@ class Schema(object):
         return Schema.count
 
 
-    def viewTableNames(self):  # to list all the table names in the all.sch
+    def viewTableNames(self):  # 显示所有表名
 
-        print ('viewtablenames begin to execute')
         for i in self.headObj.tableNames:
             print ('Table name is     ', i[0])
-        print ('execute Done!')
 
     #------------------------
-    # to show the schema of given table
-    # input
-    #       table_name: str
+    # 显示指定表的字段结构
+    # input:  table_name (str)
+    # output: 无，直接打印表结构
     #------------------------------
     def viewTableStructure(self, table_name):
 
@@ -106,157 +132,145 @@ class Schema(object):
 
                 type_names = {0: 'str', 1: 'varstr', 2: 'int', 3: 'bool'}
 
-                print(f'Table: {table_name}')
-                for f in fields:
-                    fname = f[0].strip()
-                    ftype = f[1]
-                    flen = f[2]
-                    tname = type_names.get(ftype, str(ftype))
-                    print(f'  {fname:<15} type={tname:<8} len={flen}')
+                if HAS_RICH:
+                    console = Console()
+                    table = Table(title=f'Table: {table_name}', show_header=True, header_style="bold magenta", show_lines=True)
+                    table.add_column("Field", style="cyan")
+                    table.add_column("Type", style="green")
+                    table.add_column("Length", style="yellow", justify="right")
+                    for f in fields:
+                        fname = f[0].strip()
+                        ftype = f[1]
+                        flen = f[2]
+                        tname = type_names.get(ftype, str(ftype))
+                        table.add_row(fname, tname, str(flen))
+                    console.print(table)
+                else:
+                    print(f'Table: {table_name}')
+                    for f in fields:
+                        fname = f[0].strip()
+                        ftype = f[1]
+                        flen = f[2]
+                        tname = type_names.get(ftype, str(ftype))
+                        print(f'  {fname:<15} type={tname:<8} len={flen}')
                 return
 
         print("Table not found")
 
     # ------------------------------------------------
-    # constructor of the class
+    # 构造函数：读取 all.sch，构建 Header 内存缓存
     # ------------------------------------------------
     def __init__(self):
-        print ('__init__ of Schema')
 
-        print ('schema fileName is ' + Schema.fileName)
-        self.fileObj = open(Schema.fileName, 'rb+')  # in binary format
+        self.fileObj = open(Schema.fileName, 'rb+')  # 以二进制格式打开
 
-        # read all data from schema file
-        bufLen = META_HEAD_SIZE + TABLE_NAME_HEAD_SIZE + MAX_FIELD_SECTION_SIZE  # the length of metahead, table name entries and feildName sections
+        # 读取 all.sch 全部内容到 buf
+        bufLen = META_HEAD_SIZE + TABLE_NAME_HEAD_SIZE + MAX_FIELD_SECTION_SIZE
         buf = ctypes.create_string_buffer(bufLen)
         buf = self.fileObj.read(bufLen)
 
-        #the following is to print the content of the buffer
         buf.strip()
-        if len(buf) == 0:  # for the first time, there is nothing in the schema file
+        if len(buf) == 0:  # all.sch 为空，首次运行
             self.body_begin_index = BODY_BEGIN_INDEX
-            buf = struct.pack('!?ii', False, 0, self.body_begin_index)  # is_stored, tablenum,offset
+            buf = struct.pack('!?ii', False, 0, self.body_begin_index)  # 写入初始 metaHead
 
             self.fileObj.seek(0)
             self.fileObj.write(buf)
             self.fileObj.flush()
 
-            # the following is to create a main memory structure for the schema
-
-            tableNameList = []
-            fieldNameList = {}  # it is a dictionary
+            # 创建空的 Header 内存对象
             nameList = []
             fieldsList = {}
-            self.headObj = head_db.Header(nameList, fieldsList,False, 0, self.body_begin_index)
+            self.headObj = head_db.Header(nameList, fieldsList, False, 0, self.body_begin_index)
 
-            print ('metaHead of schema has been written to all.sch and the Header ojbect created')
+        else:  # all.sch 非空，解析已有数据
 
-        else:  # there is something in the schema file
-
-
-            print ("there is something  in the all.sch")
-            # in the following ? denotes bool type and  i denotes int type
-            isStored, tempTableNum, tempOffset = struct.unpack_from('!?ii', buf, 0)   #link:https://docs.python.org/2/library/struct.html
-
-            print ("tableNum in schema file is ", tempTableNum)
-            print ("isStored in schema file is ", isStored)
-            print ("offset of body in schema  file is ", tempOffset)
+            # 解析 metaHead：isStored(1字节) + tableNum(4字节) + offset(4字节)
+            isStored, tempTableNum, tempOffset = struct.unpack_from('!?ii', buf, 0)
 
             Schema.body_begin_index = tempOffset
             nameList=[]
             fieldsList={}
-             # it is a dictionary
 
-            if isStored == False:  # only the meta head exists, but there is no table information in the schema file
+            if isStored == False:  # metaHead 存在但无表信息
                 self.headObj = head_db.Header(nameList, fieldsList, False, 0, BODY_BEGIN_INDEX)
-                print ("there is no table in the file")
 
-            else:  # there is information of some tables
+            else:  # 有表信息，解析 tableNameHead 和 body
 
-                print( "there is at least one table in the schema file ")
-
-                # the following is to fetch the tableNameHead from the buffer
+                # 解析 tableNameHead：逐个读取表名条目
                 for i in range(tempTableNum):
-                    # fetch the table name in tableNameHead, decode to str immediately
+                    # 读取表名（10字节），立即 decode 为 str
                     tempNameBytes, = struct.unpack_from('!10s', buf,
                                                    META_HEAD_SIZE + i * TABLE_NAME_ENTRY_LEN)
                     tempName = tempNameBytes.decode('utf-8').strip()
-                    print ("tablename is ", tempName)
 
-                    # fetch the number of fields in the table in tableNameHead
+                    # 读取该表的字段数
                     tempNum, = struct.unpack_from('!i', buf, META_HEAD_SIZE + i * TABLE_NAME_ENTRY_LEN + 10)
-                    print ('number of fields of table ', tempName, ' is ', tempNum)
 
-                    # fetch the offset where field names are stored in the body
+                    # 读取该表字段信息在 body 中的偏移
                     tempPos, = struct.unpack_from('!i', buf,
                                                   META_HEAD_SIZE + i * TABLE_NAME_ENTRY_LEN + 10 + struct.calcsize('i'))
-                    print ("tempPos in body is ", tempPos)
 
                     tempNameMix = (tempName, tempNum, tempPos)
-                    nameList.append(tempNameMix)  # It is a triple
+                    nameList.append(tempNameMix)
 
-                    # the following is to fetch field information from body section and each field is  (fieldname,fieldtype,fieldlength)
-                    if tempNum > 0: # the number of fields is greater than 0
-                        fields = []  # it is a list
+                    # 解析 body：逐个读取字段信息
+                    if tempNum > 0:
+                        fields = []
                         for j in range(tempNum):
                             tempFieldNameBytes,tempFieldType,tempFieldLength = struct.unpack_from('!10sii',
                                                                                              buf, tempPos + j * MAX_FIELD_LEN)
 
-                            # decode to str immediately after unpack
+                            # 读取字段名后立即 decode 为 str
                             tempFieldName = tempFieldNameBytes.decode('utf-8').strip()
 
-                            print ('field name is ', tempFieldName)
-                            print ('field type is', tempFieldType)
-                            print ('filed length is', tempFieldLength)
-
                             tempFieldTuple=(tempFieldName,tempFieldType,tempFieldLength)
-
                             fields.append(tempFieldTuple)
-
 
                         fieldsList[tempName]=fields
 
-                # the main memory structure for schema is constructed
-
+                # 构造 Header 内存缓存对象
                 self.headObj = head_db.Header(nameList, fieldsList, True, tempTableNum, tempOffset)
 
     # ----------------------------
-    # destructor of the class
+    # 析构函数：若缓存脏则全量写盘，否则只写 metaHead
     # ----------------------------
-    def __del__(self):  # write the metahead information in head object to file
+    def __del__(self):
 
-        print ("__del__ of class Schema begins to execute")
+        if self.headObj.is_dirty():
+            # 缓存脏：截断文件后全量写回
+            self.fileObj.seek(0)
+            self.fileObj.truncate(0)
+            self.fileObj.flush()
+            self.WriteBuff()
+        else:
+            # 缓存干净：只写 metaHead 12字节
+            buf = ctypes.create_string_buffer(12)
+            struct.pack_into('!?ii', buf, 0, self.headObj.isStored, self.headObj.lenOfTableNum, self.headObj.offsetOfBody)
+            self.fileObj.seek(0)
+            self.fileObj.write(buf)
+            self.fileObj.flush()
 
-        buf = ctypes.create_string_buffer(12)
-
-        struct.pack_into('!?ii', buf, 0, self.headObj.isStored, self.headObj.lenOfTableNum, self.headObj.offsetOfBody)
-        self.fileObj.seek(0)
-        self.fileObj.write(buf)
-        self.fileObj.flush()
         self.fileObj.close()
 
     # --------------------------
-    # delete all the contents in the schema file
+    # 清空所有表模式（只改内存，标脏，延迟写盘）
     # ----------------------------------------
     def deleteAll(self):
         self.headObj.tableFields={}
         self.headObj.tableNames=[]
-        self.fileObj.seek(0)
-        self.fileObj.truncate(0)
         self.headObj.isStored = False
         self.headObj.lenOfTableNum = 0
         self.headObj.offsetOfBody = self.body_begin_index
-        self.fileObj.flush()
-        print ("all.sch file has been truncated")
+        self.headObj.mark_dirty()
 
     # -----------------------------
-    # insert a table schema to the schema file
+    # 新增一张表的模式（只改内存，标脏，延迟写盘）
     # input:
-    #       tablename: str, the table to be added
+    #       tablename: str, 表名
     #       fieldList: list of tuples (field_name(str), field_type(int), field_length(int))
     # -------------------------------
-    def appendTable(self, tableName, fieldList):  # it modify the tableNameHead and body of all.sch
-        print ("appendTable begins to execute")
+    def appendTable(self, tableName, fieldList):
         tableName = tableName.strip()
 
         if len(tableName) == 0 or len(tableName) > 10 or len(fieldList)==0:
@@ -265,49 +279,21 @@ class Schema(object):
 
             fieldNum = len(fieldList)
 
-            print ("the following is to write the fields to body in all.sch")
-            fieldBuff = ctypes.create_string_buffer(MAX_FIELD_LEN * len(fieldList))
-            beginIndex = 0
-            for i in range(len(fieldList)):
-                (fieldName,fieldType,fieldLength)=fieldList[i]
-                # encode to bytes just before pack
-                filledFieldName = fillTableName(fieldName) if len(fieldName.strip()) < MAX_FIELD_NAME_LEN else fieldName.strip()
-                filledFieldNameBytes = filledFieldName.encode('utf-8')
-                struct.pack_into('!10sii', fieldBuff, beginIndex, filledFieldNameBytes, int(fieldType), int(fieldLength))
-
-                beginIndex = beginIndex + MAX_FIELD_LEN
-
-            writePos = self.headObj.offsetOfBody
-
-            self.fileObj.seek(writePos)
-            self.fileObj.write(fieldBuff)
-            self.fileObj.flush()
-
-            print ("the following is to write table name entry to tableNameHead in all.sch")
-            # encode to bytes just before pack
-            filledTableName = fillTableName(tableName)
-            filledTableNameBytes = filledTableName.encode('utf-8')
-            nameBuf = struct.pack('!10sii', filledTableNameBytes, fieldNum, self.headObj.offsetOfBody)
-
-            self.fileObj.seek(META_HEAD_SIZE + self.headObj.lenOfTableNum * TABLE_NAME_ENTRY_LEN)
+            # 构造表名三元组：(表名, 字段数, body偏移)
             nameContent = (tableName, fieldNum, self.headObj.offsetOfBody)
 
-            self.fileObj.write(nameBuf)
-            self.fileObj.flush()
-
-            print ("to modify the header structure in main memory")
+            # 修改 Header 内存结构
             self.headObj.isStored = True
             self.headObj.lenOfTableNum += 1
-            self.headObj.offsetOfBody += fieldNum * MAX_FIELD_LEN
+            self.headObj.offsetOfBody += fieldNum * MAX_FIELD_LEN  # 更新 body 空闲偏移
             self.headObj.tableNames.append(nameContent)
             self.headObj.tableFields[tableName]=fieldList
+            self.headObj.mark_dirty()
 
     # -------------------------------
-    # to determine whether the table named table_name exist, depending on the main memory structures
-    # input
-    #       table_name: str
-    # output
-    #       True or False
+    # 查询某表是否存在
+    # input:  table_name (str)
+    # output: True or False
     # -------------------------------------------------------
     def find_table(self, table_name):
         table_name = table_name.strip()
@@ -316,48 +302,45 @@ class Schema(object):
 
 
 
-        
     # ----------------------------------------------
-    # to write the main memory information into the schema file
-    # input
-    #       
-    # output
-    #       True or False
-    # ------------------------------------------------   
-
+    # 将 Header 内存数据全量写回 all.sch
+    # 写入顺序：metaHead → tableNameHead → body
+    # ------------------------------------------------
     def WriteBuff(self):
-        bufLen = META_HEAD_SIZE + TABLE_NAME_HEAD_SIZE + MAX_FIELD_SECTION_SIZE  # the length of metahead, table name entries and feildName sections
+        bufLen = META_HEAD_SIZE + TABLE_NAME_HEAD_SIZE + MAX_FIELD_SECTION_SIZE
         buf = ctypes.create_string_buffer(bufLen)
+
+        # 写 metaHead
         struct.pack_into('!?ii', buf, 0, self.headObj.isStored, self.headObj.lenOfTableNum, self.headObj.offsetOfBody)
 
+        # 写 tableNameHead 和 body
         for idx in range(len(self.headObj.tableNames)):
             tmp_tableName = self.headObj.tableNames[idx][0].strip()
-            # encode to bytes just before pack
+            # pack 前编码为 bytes
             tmp_tableName_padded = fillTableName(tmp_tableName).encode('utf-8')
 
-            # write (tablename,numberoffields,offsetinbody) to buffer
+            # 写入表名条目：(表名, 字段数, body偏移)
             struct.pack_into('!10sii', buf, META_HEAD_SIZE + idx * TABLE_NAME_ENTRY_LEN, tmp_tableName_padded,
                              self.headObj.tableNames[idx][1],self.headObj.tableNames[idx][2])
 
-            # write the field information of each table into the buffer
+            # 写入该表的字段信息到 body
             table_name_key = self.headObj.tableNames[idx][0].strip()
             if table_name_key in self.headObj.tableFields:
                 for idj in range(self.headObj.tableNames[idx][1]):
                     (tempFieldName,tempFieldType,tempFieldLength)=self.headObj.tableFields[table_name_key][idj]
-                    # encode to bytes just before pack
+                    # pack 前编码为 bytes
                     tempFieldNameBytes = fillTableName(tempFieldName).encode('utf-8')
                     struct.pack_into('!10sii',buf,self.headObj.tableNames[idx][2]+idj*MAX_FIELD_LEN,
                                     tempFieldNameBytes,tempFieldType,tempFieldLength)
+
         self.fileObj.seek(0)
         self.fileObj.write(buf)
         self.fileObj.flush()
 
     # ----------------------------------------------
-    # to delete the schema of a table from the schema file
-    # input
-    #       table_name: str, the table to be deleted
-    # output
-    #       True or False
+    # 删除一张表的模式（只改内存，标脏，延迟写盘）
+    # input:  table_name (str)
+    # output: True or False
     # ------------------------------------------------
     def delete_table_schema(self, table_name):
         table_name = table_name.strip()
@@ -367,40 +350,36 @@ class Schema(object):
                 tmpIndex=i
         if tmpIndex>=0:
 
-            # modify the main memory structure
-            
+            # 从内存中删除该表的表名条目和字段信息
             del self.headObj.tableNames[tmpIndex]
             del self.headObj.tableFields[table_name]
             self.headObj.lenOfTableNum-=1
 
-            
-            if len(self.headObj.tableNames)>0: # there is at least one table after the deletion
+            if len(self.headObj.tableNames)>0: # 删除后仍有表
                 name_list = [x[0] for x in self.headObj.tableNames]
                 field_num_per_table = [x[1] for x in self.headObj.tableNames]
-                table_offset = [x[2] for x in self.headObj.tableNames]
 
-                table_offset[0] = BODY_BEGIN_INDEX
-                for idx in range(1,len(table_offset)):
-                    table_offset[idx] = table_offset[idx-1] + field_num_per_table[idx-1]*MAX_FIELD_LEN
-                    
+                # 重新计算剩余表在 body 中的偏移
+                table_offset = [BODY_BEGIN_INDEX]
+                for idx in range(1, len(self.headObj.tableNames)):
+                    table_offset.append(table_offset[idx-1] + field_num_per_table[idx-1]*MAX_FIELD_LEN)
+
                 self.headObj.tableNames = list(zip(name_list, field_num_per_table, table_offset))
                 self.headObj.offsetOfBody=self.headObj.tableNames[-1][2]+self.headObj.tableNames[-1][1]*MAX_FIELD_LEN
-                self.WriteBuff()
 
-            else:# there is no table after the deletion
-                print (False)
+            else:# 删除后无表
                 self.headObj.offsetOfBody = BODY_BEGIN_INDEX
                 self.headObj.isStored = False
+
+            self.headObj.mark_dirty()
             return True
         else:
             print ('Cannot find the table!')
             return False
 
     # ---------------------------
-    # to return the list of all the table names
-    # input
-    # output
-    #       table_name_list: list of str
+    # 返回所有表名列表
+    # output: list of str
     # --------------------------------
     def get_table_name_list(self):
         return [x[0].strip() for x in self.headObj.tableNames]
