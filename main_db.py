@@ -10,7 +10,7 @@
 #   1. 显示启动横幅 (NJUPTSQL ASCII Art)
 #   2. 创建 Schema 对象（读取 all.sch，构建 Header 内存缓存）
 #   3. 显示菜单，循环等待用户选择
-#   4. 根据选择调用 schema_db / storage_db / mega_sfw 的相应功能
+#   4. 根据选择调用 schema_db / storage_db / lex_db / parser_db / query_plan_db 的相应功能
 #   5. 用户输入 '.' 退出，触发 Schema.__del__ 将脏缓存写回磁盘
 #
 # 菜单选项:
@@ -27,11 +27,10 @@
 #   head_db      - Schema 的内存缓存结构 (Header 类)
 #   schema_db    - 表模式的磁盘存储与内存管理 (Schema 类)
 #   storage_db   - 表数据的磁盘存储与内存管理 (Storage 类)
-#   mega_sfw     - 简化的 SELECT-FROM-WHERE 查询处理
 #   common_db    - 全局常量 (BLOCK_SIZE) 和语法树节点
-#   lex_db       - 词法分析（当前由 mega_sfw 替代）
-#   parser_db    - 语法分析（当前由 mega_sfw 替代）
-#   query_plan_db - 查询计划（当前由 mega_sfw 替代）
+#   lex_db       - 词法分析：SQL 字符串 → token 序列
+#   parser_db    - 语法分析：token 序列 → 语法树(AST)
+#   query_plan_db - 查询计划：语法树 → 查询计划树 → 执行
 # ---------------------------------------
 
 import struct
@@ -54,12 +53,10 @@ import head_db  # the main memory structure of table schema
 import schema_db  # the module to process table schema
 import storage_db  # the module to process the storage of instance
 
-import query_plan_db  # for SQL clause of which data is stored in binary format
-import lex_db  # for lex, where data is stored in binary format
-import parser_db  # for yacc, where ddata is tored in binary format
-import common_db  # the global variables, functions, constants in the program
-import query_plan_db  # construct the query plan and execute it
-import mega_sfw
+import query_plan_db  # 查询计划：语法树 → 查询计划树 → 执行
+import lex_db  # 词法分析：SQL 字符串 → token 序列
+import parser_db  # 语法分析：token 序列 → 语法树(AST)
+import common_db  # 全局变量、函数、常量
 
 # NJUPTSQL ASCII Art 横幅
 BANNER_ART = r"""
@@ -252,13 +249,29 @@ def main():
             choice = input(PROMPT_STR)
 
 
-        elif choice == '5':  # SELECT FROM WHERE 查询
+        elif choice == '5':  # SELECT FROM WHERE 查询（lex→yacc→query_plan 管线）
             print('#        Your Query is to SQL QUERY                  #')
             sql_str = input('please enter the select from where clause:')
             try:
-                mega_sfw.process_sfw(sql_str)
-            except Exception:
-                print('WRONG SQL INPUT!')
+                # 重置全局语法树和查询计划树
+                common_db.global_syn_tree = None
+                common_db.global_logical_tree = None
+
+                # 第1步：词法分析 + 语法分析 → 语法树(AST)
+                lex_db.set_lex_handle()
+                parser_db.set_handle()
+                common_db.global_parser.parse(sql_str)
+
+                if common_db.global_syn_tree is None:
+                    print('SQL syntax error!')
+                else:
+                    # 第2步：语法树 → 查询计划树
+                    query_plan_db.construct_logical_tree()
+
+                    # 第3步：执行查询计划，输出结果
+                    query_plan_db.execute_logical_tree()
+            except Exception as e:
+                print('WRONG SQL INPUT!', e)
             show_menu()
             choice = input(PROMPT_STR)
 
