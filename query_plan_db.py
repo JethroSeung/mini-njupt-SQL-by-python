@@ -4,12 +4,12 @@
 # modified by: Ning Wang, Yidan Xu
 #------------------------------------------------
 #
-# 查询计划模块：将语法树转换为查询计划树并执行
+# 查询计划模块：将语法树转换为查询计划树并执行，以及 DDL/DML 语句的执行
 #
 # 整体逻辑:
-#   1. 从语法树(AST)中提取 sel_list / from_list / where_list
-#   2. 构建查询计划树：Proj(投影) → Filter(过滤) → X(笛卡尔积) → Scan(扫描)
-#   3. 自底向上执行查询计划树，返回结果
+#   1. SELECT 查询：从语法树(AST)中提取 sel_list / from_list / where_list，
+#      构建查询计划树（Proj→Filter→X→Scan），自底向上执行
+#   2. DDL/DML 语句：从语法树提取参数，直接调用 schema_db / storage_db 的底层函数
 #
 # 查询计划树结构（以 select name from students where age=19 为例）:
 #   Proj(var=['name'])           ← 投影：只保留 name 列
@@ -26,12 +26,30 @@
 #   construct_where_node   - 构建 Filter(过滤)节点，无 WHERE 时跳过
 #   construct_select_node  - 构建 Proj(投影)节点
 #   construct_logical_tree - 入口：语法树 → 查询计划树
-#   execute_logical_tree   - 入口：执行查询计划树，输出结果
+#   execute_logical_tree   - 入口：执行 SELECT 查询计划树，输出结果
+#   _print_query_result    - 格式化输出查询结果（rich.table 或纯文本）
+#
+#   execute_statement      - 统一入口：根据语法树类型分发执行
+#   execute_create_table   - 执行 CREATE TABLE：提取表名和字段定义，调 schema_db + storage_db
+#   execute_insert         - 执行 INSERT INTO：提取表名和值列表，调 storage_db.insert_record
+#   execute_delete         - 执行 DELETE FROM：提取表名，标记所有行删除，调 persist_records
+#   execute_update         - 执行 UPDATE SET WHERE：提取参数，调 storage_db.update_by_condition
+#   execute_drop_table     - 执行 DROP TABLE：提取表名，调 schema_db.delete_table_schema + 删文件
+#
+#   辅助函数:
+#   _strip_quotes          - 去除字符串常量的引号
+#   _collect_leaves        - 递归收集指定类型节点的叶子值
+#   _collect_all_leaves    - 递归收集节点下所有叶子值
+#   _collect_all_leaves_simple - 收集节点的第一个叶子值
+#   _extract_field_defs    - 从 FieldDefList 节点提取所有字段定义
+#   _parse_one_field_def   - 解析单个 FieldDef 节点
 #------------------------------------------------
 
 import common_db
 import storage_db
+import schema_db
 import itertools
+import os
 
 try:
     from rich.console import Console
@@ -365,3 +383,330 @@ def _print_query_result(field_names, records):
         print('  |  '.join(display_names))
         for record in records:
             print([str(v) for v in record])
+
+
+# ==================== DDL/DML 执行函数 ====================
+
+# 辅助函数：去除字符串常量的引号
+def _strip_quotes(val):
+    """去除字符串常量两端的单引号"""
+    if isinstance(val, str) and len(val) >= 2:
+        if val[0] == "'" and val[-1] == "'":
+            return val[1:-1]
+    return val
+
+
+# 辅助函数：从语法树中递归收集指定类型节点的叶子值
+def _collect_leaves(node, target_value):
+    """递归遍历语法树，收集 value == target_value 的节点的叶子值"""
+    result = []
+    if isinstance(node, common_db.Node):
+        if node.value == target_value:
+            # 收集该节点下所有叶子值
+            _collect_all_leaves(node, result)
+        elif node.children:
+            for child in node.children:
+                result.extend(_collect_leaves(child, target_value))
+    return result
+
+
+def _collect_all_leaves(node, result):
+    """递归收集节点下所有叶子值"""
+    if isinstance(node, common_db.Node):
+        if not node.children and node.value not in (',', '(', ')'):
+            result.append(node.value)
+        elif node.children:
+            for child in node.children:
+                _collect_all_leaves(child, result)
+    elif isinstance(node, str) and node not in (',', '(', ')'):
+        result.append(node)
+
+
+#----------------------------------
+# 统一入口：根据语法树类型分发执行
+#----------------------------------
+def execute_statement(schema_obj):
+    """根据语法树类型分发执行"""
+    tree = common_db.global_syn_tree
+    if tree is None:
+        print('syntax tree is None')
+        return
+
+    stmt_node = tree.children[0]
+    stmt_type = stmt_node.value
+
+    if stmt_type == 'SFW':
+        construct_logical_tree()
+        execute_logical_tree()
+    elif stmt_type == 'CreateTable':
+        execute_create_table(schema_obj, stmt_node)
+    elif stmt_type == 'Insert':
+        execute_insert(stmt_node)
+    elif stmt_type == 'Delete':
+        execute_delete(stmt_node)
+    elif stmt_type == 'Update':
+        execute_update(stmt_node)
+    elif stmt_type == 'DropTable':
+        execute_drop_table(schema_obj, stmt_node)
+    else:
+        print(f'Unknown statement type: {stmt_type}')
+
+
+#----------------------------------
+# 执行 CREATE TABLE 语句
+#----------------------------------
+def execute_create_table(schema_obj, stmt_node):
+    """执行 CREATE TABLE：从语法树提取表名和字段定义，创建表"""
+    # 1. 提取表名（TCNAME 节点，在 CREATE/TABLE 之后）
+    table_name = None
+    field_defs_raw = []  # 收集 FieldDef 的原始数据
+
+    for child in stmt_node.children:
+        if isinstance(child, common_db.Node):
+            if child.value == 'TCNAME' and table_name is None:
+                # 第一个 TCNAME 是表名
+                table_name = _collect_all_leaves_simple(child)
+            elif child.value == 'FieldDefList':
+                # 提取所有 FieldDef
+                field_defs_raw = _extract_field_defs(child)
+
+    if not table_name:
+        print('CREATE TABLE: table name not found')
+        return
+
+    # 2. 构建 fieldList: [(field_name, field_type, field_length), ...]
+    field_list = []
+    for fd in field_defs_raw:
+        fname = fd['name']
+        if fd['type'] == 'char':
+            # char(n) → type=0(str), length=n
+            flen = int(fd['length'])
+            field_list.append((fname, 0, flen))
+        elif fd['type'] == 'integer':
+            # integer → type=2(int), length=4
+            field_list.append((fname, 2, 4))
+
+    # 3. 检查表是否已存在
+    if schema_obj.find_table(table_name):
+        print(f'Table {table_name} already exists!')
+        return
+
+    # 4. 调 schema_obj.appendTable 写入 schema
+    schema_obj.appendTable(table_name, field_list)
+
+    # 5. 创建 Storage 对象，用 init_from_fieldlist 初始化 .dat 文件
+    data_obj = storage_db.Storage(table_name, skip_init=True)
+    data_obj.init_from_fieldlist(field_list)
+    del data_obj
+
+    print(f'Table {table_name} created successfully.')
+
+
+def _collect_all_leaves_simple(node):
+    """收集节点的第一个叶子值（用于提取表名等单一值）"""
+    if isinstance(node, common_db.Node):
+        if not node.children:
+            return node.value
+        for child in node.children:
+            if isinstance(child, str):
+                return child
+            val = _collect_all_leaves_simple(child)
+            if val:
+                return val
+    elif isinstance(node, str):
+        return node
+    return None
+
+
+def _extract_field_defs(fielddeflist_node):
+    """从 FieldDefList 节点提取所有字段定义"""
+    defs = []
+    if not isinstance(fielddeflist_node, common_db.Node):
+        return defs
+
+    for child in fielddeflist_node.children:
+        if isinstance(child, common_db.Node) and child.value == 'FieldDef':
+            fd = _parse_one_field_def(child)
+            if fd:
+                defs.append(fd)
+        elif isinstance(child, common_db.Node) and child.value == 'FieldDefList':
+            # 递归处理嵌套的 FieldDefList
+            defs.extend(_extract_field_defs(child))
+
+    return defs
+
+
+def _parse_one_field_def(fielddef_node):
+    """解析单个 FieldDef 节点，返回 {'name': ..., 'type': ..., 'length': ...}"""
+    # 检查子节点中是否有 CHAR 或 INTEGER 关键字节点
+    has_char = False
+    has_integer = False
+    for child in fielddef_node.children:
+        if isinstance(child, common_db.Node):
+            if child.value == 'CHAR':
+                has_char = True
+            elif child.value == 'INTEGER':
+                has_integer = True
+
+    # 收集所有叶子值
+    leaves = []
+    _collect_all_leaves(fielddef_node, leaves)
+    # 过滤掉括号、逗号和类型关键字
+    leaves = [l for l in leaves if l not in ('(', ')', ',', 'CHAR', 'INTEGER')]
+
+    if has_integer:
+        # integer 类型：只有字段名
+        return {'name': leaves[0], 'type': 'integer', 'length': None}
+    elif has_char and len(leaves) >= 2:
+        # char 类型：字段名 + 长度
+        return {'name': leaves[0], 'type': 'char', 'length': leaves[1]}
+
+    return None
+
+
+#----------------------------------
+# 执行 INSERT INTO 语句
+#----------------------------------
+def execute_insert(stmt_node):
+    """执行 INSERT INTO ... VALUES ...：从语法树提取表名和值列表，插入数据"""
+    # 1. 提取表名
+    table_name = None
+    values = []
+
+    for child in stmt_node.children:
+        if isinstance(child, common_db.Node):
+            if child.value == 'TCNAME' and table_name is None:
+                table_name = _collect_all_leaves_simple(child)
+            elif child.value == 'ValueList':
+                # 收集所有 CONSTANT 叶子值
+                _collect_all_leaves(child, values)
+
+    if not table_name:
+        print('INSERT: table name not found')
+        return
+
+    # 2. 去除字符串值的引号
+    values = [_strip_quotes(v) for v in values]
+
+    # 3. 创建 Storage 对象，插入记录
+    try:
+        data_obj = storage_db.Storage(table_name)
+        if data_obj.insert_record(values):
+            print('1 row inserted.')
+        else:
+            print('Insert failed: value type or length mismatch.')
+        del data_obj
+    except Exception as e:
+        print(f'Insert error: {e}')
+
+
+#----------------------------------
+# 执行 DELETE FROM 语句
+#----------------------------------
+def execute_delete(stmt_node):
+    """执行 DELETE FROM ...：从语法树提取表名，删除表中所有数据"""
+    # 1. 提取表名
+    table_name = None
+    for child in stmt_node.children:
+        if isinstance(child, common_db.Node) and child.value == 'TCNAME':
+            table_name = _collect_all_leaves_simple(child)
+            break
+
+    if not table_name:
+        print('DELETE: table name not found')
+        return
+
+    # 2. 创建 Storage 对象，标记所有行为已删除，压缩写回
+    try:
+        data_obj = storage_db.Storage(table_name)
+        # 标记所有行为已删除
+        count = 0
+        for i in range(len(data_obj.deleted_flags)):
+            if not data_obj.deleted_flags[i]:
+                data_obj.deleted_flags[i] = True
+                count += 1
+        data_obj.persist_records()
+        del data_obj
+        print(f'{count} row(s) deleted.')
+    except Exception as e:
+        print(f'Delete error: {e}')
+
+
+#----------------------------------
+# 执行 UPDATE SET WHERE 语句
+#----------------------------------
+def execute_update(stmt_node):
+    """执行 UPDATE ... SET ... WHERE ...：从语法树提取参数，更新数据"""
+    # 语法树结构：Update → [UPDATE, TCNAME(表名), SET, TCNAME(目标字段), =, CONSTANT(新值), WHERE, TCNAME(条件字段), =, CONSTANT(条件值)]
+    table_name = None
+    set_field = None
+    set_value = None
+    where_field = None
+    where_value = None
+
+    tcname_count = 0
+    constant_count = 0
+
+    for child in stmt_node.children:
+        if isinstance(child, common_db.Node):
+            if child.value == 'TCNAME':
+                val = _collect_all_leaves_simple(child)
+                if tcname_count == 0:
+                    table_name = val
+                elif tcname_count == 1:
+                    set_field = val
+                elif tcname_count == 2:
+                    where_field = val
+                tcname_count += 1
+            elif child.value == 'CONSTANT':
+                val = _collect_all_leaves_simple(child)
+                val = _strip_quotes(val)
+                if constant_count == 0:
+                    set_value = val
+                elif constant_count == 1:
+                    where_value = val
+                constant_count += 1
+
+    if not table_name:
+        print('UPDATE: table name not found')
+        return
+
+    # 调用 storage_db 的 update_by_condition
+    try:
+        data_obj = storage_db.Storage(table_name)
+        data_obj.update_by_condition(where_field, where_value, set_field, set_value)
+        del data_obj
+    except Exception as e:
+        print(f'Update error: {e}')
+
+
+#----------------------------------
+# 执行 DROP TABLE 语句
+#----------------------------------
+def execute_drop_table(schema_obj, stmt_node):
+    """执行 DROP TABLE ...：从语法树提取表名，删除表结构和数据文件"""
+    # 1. 提取表名
+    table_name = None
+    for child in stmt_node.children:
+        if isinstance(child, common_db.Node) and child.value == 'TCNAME':
+            table_name = _collect_all_leaves_simple(child)
+            break
+
+    if not table_name:
+        print('DROP TABLE: table name not found')
+        return
+
+    # 2. 从 schema 中删除表结构
+    if schema_obj.find_table(table_name):
+        if schema_obj.delete_table_schema(table_name):
+            # 3. 删除 .dat 文件
+            file_path = table_name.strip() + '.dat'
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f'Table {table_name} dropped successfully.')
+            else:
+                print(f'Table {table_name} dropped (data file not found).')
+        else:
+            print(f'Failed to drop table {table_name}.')
+    else:
+        print(f'Table {table_name} does not exist.')

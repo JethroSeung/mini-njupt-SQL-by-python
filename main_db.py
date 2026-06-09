@@ -21,6 +21,11 @@
 #   5 - SELECT FROM WHERE 查询
 #   6 - 按字段条件删除行
 #   7 - 按字段条件更新行
+#   8 - CREATE TABLE (SQL)
+#   9 - INSERT INTO (SQL)
+#   10 - DELETE FROM (SQL)
+#   11 - UPDATE SET WHERE (SQL)
+#   12 - DROP TABLE (SQL)
 #   . - 退出程序
 #
 # 依赖模块:
@@ -87,6 +92,11 @@ MENU_ITEMS = [
     ("5", "Select from where clause"),
     ("6", "Delete a row according to field keyword"),
     ("7", "Update a row according to field keyword"),
+    ("8", "Create table (SQL)"),
+    ("9", "Insert into table (SQL)"),
+    ("10", "Delete from table (SQL)"),
+    ("11", "Update table (SQL)"),
+    ("12", "Drop table (SQL)"),
     (".", "Quit"),
 ]
 
@@ -329,6 +339,29 @@ def main():
 
             del dataObj
 
+            show_menu()
+            choice = input(PROMPT_STR)
+
+
+        elif choice in ('8', '9', '10', '11', '12'):  # SQL 语句（CREATE/INSERT/DELETE/UPDATE/DROP）
+            sql_str = input('please enter the SQL statement: ')
+            try:
+                # 重置全局语法树和查询计划树
+                common_db.global_syn_tree = None
+                common_db.global_logical_tree = None
+
+                # 第1步：词法分析 + 语法分析 → 语法树(AST)
+                lex_db.set_lex_handle()
+                parser_db.set_handle()
+                common_db.global_parser.parse(sql_str)
+
+                if common_db.global_syn_tree is None:
+                    print('SQL syntax error!')
+                else:
+                    # 第2步：根据语句类型分发执行
+                    query_plan_db.execute_statement(schemaObj)
+            except Exception as e:
+                print('WRONG SQL INPUT!', e)
             show_menu()
             choice = input(PROMPT_STR)
 

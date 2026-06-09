@@ -555,3 +555,32 @@ class Storage(object):
 
         # 第四步：压缩持久化
         self.persist_records()
+
+    # ------------------------------
+    # 用字段信息列表初始化 block 0（用于 CREATE TABLE SQL 方式建表）
+    # input:
+    #   fieldList: list of tuples (field_name(str), field_type(int), field_length(int))
+    # ------------------------------
+    def init_from_fieldlist(self, fieldList):
+        self.num_of_fields = len(fieldList)
+        self.field_name_list = list(fieldList)
+
+        # 构造 block 0：写头部 + 字段信息
+        self.dir_buf = ctypes.create_string_buffer(BLOCK_SIZE)
+        self.block_id = 0
+        self.data_block_num = 0
+
+        # 写 block 0 头部：block_id + data_block_num + num_of_fields
+        struct.pack_into('!iii', self.dir_buf, 0, 0, 0, self.num_of_fields)
+
+        offset = struct.calcsize('!iii')
+
+        # 逐个写字段信息
+        for f in self.field_name_list:
+            name_bytes = _pad_name(f[0]).encode('utf-8')
+            struct.pack_into('!10sii', self.dir_buf, offset, name_bytes, int(f[1]), int(f[2]))
+            offset += struct.calcsize('!10sii')
+
+        self.f_handle.seek(0)
+        self.f_handle.write(self.dir_buf)
+        self.f_handle.flush()
