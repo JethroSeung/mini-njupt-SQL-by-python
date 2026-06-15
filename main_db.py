@@ -50,6 +50,7 @@ try:
     from rich.panel import Panel
     from rich.color import Color
     from rich.style import Style
+    from rich.console import Console
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
@@ -62,6 +63,7 @@ import query_plan_db  # 查询计划：语法树 → 查询计划树 → 执行
 import lex_db  # 词法分析：SQL 字符串 → token 序列
 import parser_db  # 语法分析：token 序列 → 语法树(AST)
 import common_db  # 全局变量、函数、常量
+import transaction_db  # 事务管理：持久性保障 + 崩溃恢复
 
 # NJUPTSQL ASCII Art 横幅
 BANNER_ART = r"""
@@ -97,8 +99,29 @@ MENU_ITEMS = [
     ("10", "Delete from table (SQL)"),
     ("11", "Update table (SQL)"),
     ("12", "Drop table (SQL)"),
+    ("13", "Crash recovery"),
     (".", "Quit"),
 ]
+
+# 全局 Console 实例（用于 styled_input 和 sql_input）
+_console = Console() if HAS_RICH else None
+
+
+def styled_input(prompt, style="bold cyan"):
+    """带样式的输入提示（rich 可用时用彩色，否则退化为普通 input）"""
+    if HAS_RICH and _console:
+        return _console.input(f"[{style}]{prompt}[/]")
+    else:
+        return input(prompt)
+
+
+def sql_input():
+    """SQL 输入：显示 Panel 框 + 带样式提示符，返回用户输入的 SQL 字符串"""
+    if HAS_RICH:
+        rprint(Panel("Enter your SQL statement below", title="[bold]SQL Input[/]", border_style="cyan", padding=(0, 2)))
+        return _console.input("[bold cyan]SQL> [/]")
+    else:
+        return input('please enter the SQL statement: ')
 
 
 def show_menu():
@@ -138,9 +161,6 @@ def show_banner():
     print()
 
 
-PROMPT_STR = 'Input your choice: '
-
-
 # --------------------------
 # 主循环
 # ---------------------------
@@ -149,16 +169,21 @@ def main():
     # 显示启动横幅
     show_banner()
 
+    # 启动时执行崩溃恢复
+    print('[Recovery] Checking for pending transactions...')
+    txn_mgr = transaction_db.get_transaction_manager()
+    txn_mgr.recover()
+
     # 创建 Schema 对象：读取 all.sch，构建 Header 内存缓存
     schemaObj = schema_db.Schema()
     dataObj = None
     show_menu()
-    choice = input(PROMPT_STR)
+    choice = styled_input('Your choice: ', style="bold bright_green")
 
     while True:
 
         if choice == '1':  # 新建表结构并插入数据
-            tableName = input('please enter your new table name:').strip()
+            tableName = styled_input('Table name: ').strip()
 
             insertFieldList = []
             if tableName not in schemaObj.get_table_name_list():
@@ -175,9 +200,9 @@ def main():
                 record = []
                 Field_List = dataObj.getFieldList()
                 for x in Field_List:
-                    s = 'Input field name is: ' + str(x[0].strip()) + '  field type is: ' + str(x[1]) + \
-                        ' field maximum length is: ' + str(x[2]) + '\n'
-                    record.append(input(s))
+                    s = 'Field [' + str(x[0].strip()) + '] type=' + str(x[1]) + \
+                        ' len=' + str(x[2]) + ' value: '
+                    record.append(styled_input(s))
 
                 if dataObj.insert_record(record):  # 插入一行
                     print('OK!')
@@ -187,15 +212,12 @@ def main():
                 del dataObj
 
             show_menu()
-            choice = input(PROMPT_STR)
-
-
-
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
         elif choice == '2':  # 删除表结构及数据文件
 
-            table_name = input('please input the name of the table to be deleted:').strip()
+            table_name = styled_input('Table name to delete: ').strip()
             if schemaObj.find_table(table_name):
                 if schemaObj.delete_table_schema(
                         table_name):  # 从 schema 中删除表结构
@@ -212,14 +234,14 @@ def main():
 
 
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
 
         elif choice == '3':  # 查看表结构和数据
 
             print(schemaObj.headObj.tableNames)
-            table_name = input('please input the name of the table to be displayed:').strip()
+            table_name = styled_input('Table name to display: ').strip()
             if table_name:    #表名不为空
                 if schemaObj.find_table(table_name):
                     schemaObj.viewTableStructure(table_name)  # 显示表结构
@@ -231,7 +253,7 @@ def main():
                     print('table name is None')
 
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
 
@@ -256,12 +278,11 @@ def main():
             print("All tables and data have been deleted.")
 
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
         elif choice == '5':  # SELECT FROM WHERE 查询（lex→yacc→query_plan 管线）
-            print('#        Your Query is to SQL QUERY                  #')
-            sql_str = input('please enter the select from where clause:')
+            sql_str = sql_input()
             try:
                 # 重置全局语法树和查询计划树
                 common_db.global_syn_tree = None
@@ -283,13 +304,13 @@ def main():
             except Exception as e:
                 print('WRONG SQL INPUT!', e)
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
         elif choice == '6':  # 按字段条件删除行
 
-            table_name = input('please input the name of the table to be deleted from:').strip()
-            field_input = input('please input (fieldname=value):')
+            table_name = styled_input('Table name: ').strip()
+            field_input = styled_input('Condition (fieldname=value): ')
 
             if '=' not in field_input:
                 print('Wrong format! Use field=value')
@@ -303,13 +324,13 @@ def main():
                 del dataObj
 
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
         elif choice == '7':  # 按字段条件更新行
 
             print("---- UPDATE ----")
 
-            table_name = input("table name: ").strip()
+            table_name = styled_input("Table name: ").strip()
 
             if not table_name:
                 print("Invalid table name")
@@ -321,30 +342,30 @@ def main():
 
             print("Available fields:", field_names)
 
-            cond_field = input("condition field: ").strip()
+            cond_field = styled_input("Condition field: ").strip()
             if cond_field not in field_names:
                 print("Field not found!")
                 continue
 
-            cond_value = input("condition value: ").strip()
+            cond_value = styled_input("Condition value: ").strip()
 
-            target_field = input("field to update: ").strip()
+            target_field = styled_input("Field to update: ").strip()
             if target_field not in field_names:
                 print("Field not found!")
                 continue
 
-            new_value = input("new value: ").strip()
+            new_value = styled_input("New value: ").strip()
 
             dataObj.update_by_condition(cond_field, cond_value, target_field, new_value)
 
             del dataObj
 
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
         elif choice in ('8', '9', '10', '11', '12'):  # SQL 语句（CREATE/INSERT/DELETE/UPDATE/DROP）
-            sql_str = input('please enter the SQL statement: ')
+            sql_str = sql_input()
             try:
                 # 重置全局语法树和查询计划树
                 common_db.global_syn_tree = None
@@ -363,7 +384,16 @@ def main():
             except Exception as e:
                 print('WRONG SQL INPUT!', e)
             show_menu()
-            choice = input(PROMPT_STR)
+            choice = styled_input('Your choice: ', style="bold bright_green")
+
+
+        elif choice == '13':  # 崩溃恢复
+            print('[Recovery] Starting crash recovery...')
+            txn_mgr = transaction_db.get_transaction_manager()
+            txn_mgr.recover()
+            print('[Recovery] Done.')
+            show_menu()
+            choice = styled_input('Your choice: ', style="bold bright_green")
 
 
         elif choice == '.':  # 退出程序

@@ -48,6 +48,7 @@
 import common_db
 import storage_db
 import schema_db
+import transaction_db
 import itertools
 import os
 
@@ -565,7 +566,7 @@ def _parse_one_field_def(fielddef_node):
 
 
 #----------------------------------
-# 执行 INSERT INTO 语句
+# 执行 INSERT INTO 语句（带事务持久性保障）
 #----------------------------------
 def execute_insert(stmt_node):
     """执行 INSERT INTO ... VALUES ...：从语法树提取表名和值列表，插入数据"""
@@ -588,13 +589,35 @@ def execute_insert(stmt_node):
     # 2. 去除字符串值的引号
     values = [_strip_quotes(v) for v in values]
 
-    # 3. 创建 Storage 对象，插入记录
+    # 3. 用事务包裹插入操作，保障持久性
     try:
+        txn_mgr = transaction_db.get_transaction_manager()
+        txn_mgr.begin_transaction()
+
         data_obj = storage_db.Storage(table_name)
-        if data_obj.insert_record(values):
+
+        # 先记后写规则：先保存前像，再修改数据库
+        old_block_num = data_obj.data_block_num
+        for blk_id in range(old_block_num + 1):
+            block_data = data_obj.read_block(blk_id)
+            txn_mgr.write_before_image(table_name, blk_id, block_data)
+
+        # 执行插入
+        result = data_obj.insert_record(values)
+
+        if result:
+            # 提交规则：后像在提交前写入日志
+            new_block_num = data_obj.data_block_num
+            for blk_id in range(new_block_num + 1):
+                block_data = data_obj.read_block(blk_id)
+                txn_mgr.write_after_image(table_name, blk_id, block_data)
+
+            txn_mgr.commit_transaction()
             print('1 row inserted.')
         else:
+            txn_mgr.abort_transaction()
             print('Insert failed: value type or length mismatch.')
+
         del data_obj
     except Exception as e:
         print(f'Insert error: {e}')
@@ -633,7 +656,7 @@ def execute_delete(stmt_node):
 
 
 #----------------------------------
-# 执行 UPDATE SET WHERE 语句
+# 执行 UPDATE SET WHERE 语句（带事务持久性保障）
 #----------------------------------
 def execute_update(stmt_node):
     """执行 UPDATE ... SET ... WHERE ...：从语法树提取参数，更新数据"""
@@ -671,10 +694,29 @@ def execute_update(stmt_node):
         print('UPDATE: table name not found')
         return
 
-    # 调用 storage_db 的 update_by_condition
+    # 用事务包裹更新操作，保障持久性
     try:
+        txn_mgr = transaction_db.get_transaction_manager()
+        txn_mgr.begin_transaction()
+
         data_obj = storage_db.Storage(table_name)
+
+        # 先记后写规则：先保存前像，再修改数据库
+        old_block_num = data_obj.data_block_num
+        for blk_id in range(old_block_num + 1):
+            block_data = data_obj.read_block(blk_id)
+            txn_mgr.write_before_image(table_name, blk_id, block_data)
+
+        # 执行更新
         data_obj.update_by_condition(where_field, where_value, set_field, set_value)
+
+        # 提交规则：后像在提交前写入日志
+        new_block_num = data_obj.data_block_num
+        for blk_id in range(new_block_num + 1):
+            block_data = data_obj.read_block(blk_id)
+            txn_mgr.write_after_image(table_name, blk_id, block_data)
+
+        txn_mgr.commit_transaction()
         del data_obj
     except Exception as e:
         print(f'Update error: {e}')

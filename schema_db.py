@@ -162,6 +162,12 @@ class Schema(object):
     # ------------------------------------------------
     def __init__(self):
 
+        # 若 all.sch 不存在则先创建空文件
+        import os
+        if not os.path.exists(Schema.fileName):
+            with open(Schema.fileName, 'wb') as f:
+                pass
+
         self.fileObj = open(Schema.fileName, 'rb+')  # 以二进制格式打开
 
         # 读取 all.sch 全部内容到 buf
@@ -236,22 +242,27 @@ class Schema(object):
     # 析构函数：若缓存脏则全量写盘，否则只写 metaHead
     # ----------------------------
     def __del__(self):
+        if not hasattr(self, 'headObj') or not hasattr(self, 'fileObj') or self.fileObj is None:
+            return
 
-        if self.headObj.is_dirty():
-            # 缓存脏：截断文件后全量写回
-            self.fileObj.seek(0)
-            self.fileObj.truncate(0)
-            self.fileObj.flush()
-            self.WriteBuff()
-        else:
-            # 缓存干净：只写 metaHead 12字节
-            buf = ctypes.create_string_buffer(12)
-            struct.pack_into('!?ii', buf, 0, self.headObj.isStored, self.headObj.lenOfTableNum, self.headObj.offsetOfBody)
-            self.fileObj.seek(0)
-            self.fileObj.write(buf)
-            self.fileObj.flush()
+        try:
+            if self.headObj.is_dirty():
+                # 缓存脏：截断文件后全量写回
+                self.fileObj.seek(0)
+                self.fileObj.truncate(0)
+                self.fileObj.flush()
+                self.WriteBuff()
+            else:
+                # 缓存干净：只写 metaHead 12字节
+                buf = ctypes.create_string_buffer(12)
+                struct.pack_into('!?ii', buf, 0, self.headObj.isStored, self.headObj.lenOfTableNum, self.headObj.offsetOfBody)
+                self.fileObj.seek(0)
+                self.fileObj.write(buf)
+                self.fileObj.flush()
 
-        self.fileObj.close()
+            self.fileObj.close()
+        except Exception:
+            pass
 
     # --------------------------
     # 清空所有表模式（只改内存，标脏，延迟写盘）

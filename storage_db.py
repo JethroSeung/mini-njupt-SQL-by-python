@@ -76,6 +76,7 @@ class Storage(object):
             tablename = tablename.decode('utf-8')
         tablename = tablename.strip()
 
+        self.tablename = tablename  # 保存表名，供事务日志使用
         self.record_list = []       # 所有行记录
         self.record_Position = []   # 每条记录在文件中的位置 (block_id, index_in_block)
         self.deleted_flags = []     # 删除标记列表
@@ -411,14 +412,32 @@ class Storage(object):
         return self.field_name_list
 
     # ------------------------------
+    # 读取指定数据块的原始字节内容
+    # input:
+    #   block_id: int, 数据块编号（0=目录块, 1~=数据块）
+    # output:
+    #   bytes, 长度为 BLOCK_SIZE
+    # ------------------------------
+    def read_block(self, block_id):
+        offset = block_id * BLOCK_SIZE
+        self.f_handle.seek(offset)
+        data = self.f_handle.read(BLOCK_SIZE)
+        # 若文件不够长，用零填充
+        if len(data) < BLOCK_SIZE:
+            data = data + b'\x00' * (BLOCK_SIZE - len(data))
+        return data
+
+    # ------------------------------
     # 析构函数：写回 block 0 头部信息，关闭文件
     # ------------------------------
     def __del__(self):
         if hasattr(self, 'f_handle') and self.f_handle:
             try:
-                if hasattr(self, 'data_block_num'):
+                # 只有文件已正确初始化（num_of_fields > 0）才写回头部
+                # 否则会向空文件写入 8 字节，导致 "corrupted table file header"
+                if hasattr(self, 'data_block_num') and hasattr(self, 'num_of_fields') and self.num_of_fields > 0:
                     self.f_handle.seek(0)
-                    self.f_handle.write(struct.pack('!ii', 0, self.data_block_num))
+                    self.f_handle.write(struct.pack('!iii', 0, self.data_block_num, self.num_of_fields))
                     self.f_handle.flush()
             except Exception:
                 pass
