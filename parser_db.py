@@ -1,8 +1,5 @@
 #-----------------------------
 # parser_db.py
-# author: Jingyu Han   hjymail@163.com
-# modified by: Ning Wang, Yidan Xu
-#-------------------------------
 #
 # 语法分析模块：将 token 序列构建为语法树(AST)
 #

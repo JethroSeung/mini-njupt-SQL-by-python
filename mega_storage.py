@@ -4,17 +4,7 @@
 # modified by:Shuting Guo, shutingnjupt@gmail.com
 #------------------------------------------------
 
-'''
-mega_storage.py is to store table data in separate files.
-Each table is stored in a separate file with the suffix ".dat".
-For example, table named moviestar is stored in file moviestar.dat.
-As it is to demonstrate principles in chapter one, it is rather simple.
-The file is in ASCII text format, not binary one.
-Each line corresponds to one record and different field values are separated by |
-'''
-
 import os
-
 #--------------------------------------------
 # the class can store table data into files
 # functions include insert, delete and update

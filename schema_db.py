@@ -1,8 +1,5 @@
 #-----------------------------------------------
 # schema_db.py
-# author: Jingyu Han   hjymail@163.com
-# modified by: Ning wang, Yidan Xu
-#-----------------------------------------------
 #
 # 表模式(Schema)的磁盘存储与内存管理
 #
@@ -34,7 +31,9 @@
 
 import ctypes
 import struct
+import os
 import head_db # it is main memory structure for the table schema
+from common_db import DATA_DIR
 
 try:
     from rich.console import Console
@@ -102,7 +101,7 @@ class Schema(object):
     Schema class
     '''
 
-    fileName = 'all.sch'  # the schema file name
+    fileName = os.path.join(DATA_DIR, 'all.sch')  # the schema file name
     count = 0  # there should be only one object in the program
 
     @staticmethod
@@ -163,7 +162,7 @@ class Schema(object):
     def __init__(self):
 
         # 若 all.sch 不存在则先创建空文件
-        import os
+        os.makedirs(DATA_DIR, exist_ok=True)
         if not os.path.exists(Schema.fileName):
             with open(Schema.fileName, 'wb') as f:
                 pass

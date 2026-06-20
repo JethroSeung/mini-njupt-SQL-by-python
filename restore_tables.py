@@ -29,12 +29,14 @@ def run_sql(sql_str, schema_obj):
 
 def main():
     # 清理旧文件
-    for f in os.listdir('.'):
-        if f.endswith('.dat') or f.endswith('.sch') or f.endswith('.log'):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
+    data_dir = common_db.DATA_DIR
+    if os.path.exists(data_dir):
+        for f in os.listdir(data_dir):
+            if f.endswith('.dat') or f.endswith('.sch') or f.endswith('.log'):
+                try:
+                    os.remove(os.path.join(data_dir, f))
+                except Exception:
+                    pass
     transaction_db._global_txn_manager = None
 
     schema_obj = schema_db.Schema()

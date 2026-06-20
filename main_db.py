@@ -1,8 +1,5 @@
 # -----------------------
 # main_db.py
-# author: Jingyu Han   hjymail@163.com
-# modified by: Ning Wang, Yidan Xu
-# -----------------------------------
 #
 # 程序主入口，提供交互式菜单
 #
@@ -18,7 +15,7 @@
 #   2 - 删除表结构及数据文件
 #   3 - 查看表结构和数据
 #   4 - 删除所有表及数据
-#   5 - SELECT FROM WHERE 查询
+#   5 - SELECT FROM WHERE 查询(SQL)
 #   6 - 按字段条件删除行
 #   7 - 按字段条件更新行
 #   8 - CREATE TABLE (SQL)
@@ -64,6 +61,7 @@ import lex_db  # 词法分析：SQL 字符串 → token 序列
 import parser_db  # 语法分析：token 序列 → 语法树(AST)
 import common_db  # 全局变量、函数、常量
 import transaction_db  # 事务管理：持久性保障 + 崩溃恢复
+from common_db import DATA_DIR
 
 # NJUPTSQL ASCII Art 横幅
 BANNER_ART = r"""
@@ -87,20 +85,20 @@ GRADIENT_COLORS = [
 
 # 菜单项
 MENU_ITEMS = [
-    ("1", "Add a new table structure and data"),
-    ("2", "Delete a table structure and data"),
-    ("3", "View a table structure and data"),
-    ("4", "Delete all tables and data"),
-    ("5", "Select from where clause"),
-    ("6", "Delete a row according to field keyword"),
-    ("7", "Update a row according to field keyword"),
-    ("8", "Create table (SQL)"),
-    ("9", "Insert into table (SQL)"),
-    ("10", "Delete from table (SQL)"),
-    ("11", "Update table (SQL)"),
-    ("12", "Drop table (SQL)"),
-    ("13", "Crash recovery"),
-    (".", "Quit"),
+    ("1", "Add a new table structure and data / 新建表结构并插入数据"),
+    ("2", "Delete a table structure and data / 删除表结构及数据文件"),
+    ("3", "View a table structure and data / 查看表结构和数据"),
+    ("4", "Delete all tables and data / 删除所有表及数据"),
+    ("5", "Select from where clause(SQL) / 条件查询(SQL)"),
+    ("6", "Delete a row according to field keyword / 按字段关键字删除行"),
+    ("7", "Update a row according to field keyword / 按字段关键字更新行"),
+    ("8", "Create table (SQL) / 建表(SQL)"),
+    ("9", "Insert into table (SQL) / 插入数据(SQL)"),
+    ("10", "Delete from table (SQL) / 删除数据(SQL)"),
+    ("11", "Update table (SQL) / 更新数据(SQL)"),
+    ("12", "Drop table (SQL) / 删除表(SQL)"),
+    ("13", "Crash recovery / 崩溃恢复"),
+    (".", "Quit / 退出"),
 ]
 
 # 全局 Console 实例（用于 styled_input 和 sql_input）
@@ -221,9 +219,12 @@ def main():
             if schemaObj.find_table(table_name):
                 if schemaObj.delete_table_schema(
                         table_name):  # 从 schema 中删除表结构
-                    dataObj = storage_db.Storage(table_name)  # 创建数据对象
-                    dataObj.delete_table_data(table_name)  # 删除数据文件内容
-                    del dataObj
+                    file_path = os.path.join(DATA_DIR, table_name.strip() + '.dat')
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        print(f'Table {table_name} deleted successfully.')
+                    else:
+                        print(f'Table {table_name} data file not found.')
 
                 else:
                     print('the deletion from schema file fail')
@@ -264,7 +265,7 @@ def main():
             # 逐个删除数据文件
             for table_name in table_name_list:
 
-                file_path = table_name.strip() + '.dat'
+                file_path = os.path.join(DATA_DIR, table_name.strip() + '.dat')
 
                 if os.path.exists(file_path):
                     os.remove(file_path)

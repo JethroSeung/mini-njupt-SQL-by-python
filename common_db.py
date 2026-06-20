@@ -1,12 +1,14 @@
 #----------------------------------------
 # common_db.py
-# author: Jingyu Han   hjymail@163.com
-# modified by:
-#--------------------------------------------
 # the module provides the constants, class, data structures which
 # are used for all the program
 #--------------------------------------------------
+import os
+
 BLOCK_SIZE=4096 # the size of one block during reading files
+
+DATA_DIR = 'data'  # 数据文件存放目录
+os.makedirs(DATA_DIR, exist_ok=True)  # 确保目录存在
 
 global_lexer=None   # the global lex, which is filled in the moudle lex_db.py
 global_parser=None  # the global yacc, which is filled in the module yacc_db.py

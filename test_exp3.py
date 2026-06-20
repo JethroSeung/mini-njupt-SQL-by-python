@@ -1,4 +1,3 @@
-#------------------------------------------------
 # test_exp3.py
 # 事务持久性测试脚本
 # 该脚本可以独立运行
@@ -10,7 +9,6 @@
 #   3. 模拟崩溃：提交后重启，数据仍在（Redo）
 #   4. 模拟崩溃：未提交事务重启，数据被撤销（Undo）
 #   5. 前像/后像文件格式验证
-#------------------------------------------------
 
 import os
 import sys
@@ -36,12 +34,14 @@ def cleanup_all():
     import gc
     # 强制垃圾回收，确保旧对象的 __del__ 先执行完
     gc.collect()
-    for f in os.listdir('.'):
-        if f.endswith('.dat') or f.endswith('.sch') or f.endswith('.log'):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
+    data_dir = common_db.DATA_DIR
+    if os.path.exists(data_dir):
+        for f in os.listdir(data_dir):
+            if f.endswith('.dat') or f.endswith('.sch') or f.endswith('.log'):
+                try:
+                    os.remove(os.path.join(data_dir, f))
+                except Exception:
+                    pass
     # 重置全局事务管理器
     transaction_db._global_txn_manager = None
 
@@ -94,7 +94,7 @@ def test_program_startup():
 
     # all.sch 不存在，Schema() 应自动创建
     schema_obj = schema_db.Schema()
-    assert os.path.exists('all.sch'), 'all.sch should be auto-created'
+    assert os.path.exists(os.path.join(common_db.DATA_DIR, 'all.sch')), 'all.sch should be auto-created'
     assert len(schema_obj.get_table_name_list()) == 0, 'Should have 0 tables initially'
     print('  PASS: Schema() auto-creates all.sch when missing')
 
@@ -300,12 +300,12 @@ def test_image_file_format():
     run_sql("insert into t5 values('format', 42)", schema_obj)
 
     # 检查前像文件
-    assert os.path.exists('before_image.dat'), 'before_image.dat not found'
-    assert os.path.exists('after_image.dat'), 'after_image.dat not found'
+    assert os.path.exists(os.path.join(common_db.DATA_DIR, 'before_image.dat')), 'before_image.dat not found'
+    assert os.path.exists(os.path.join(common_db.DATA_DIR, 'after_image.dat')), 'after_image.dat not found'
 
     # 验证文件大小是 IMAGE_RECORD_SIZE 的整数倍
-    before_size = os.path.getsize('before_image.dat')
-    after_size = os.path.getsize('after_image.dat')
+    before_size = os.path.getsize(os.path.join(common_db.DATA_DIR, 'before_image.dat'))
+    after_size = os.path.getsize(os.path.join(common_db.DATA_DIR, 'after_image.dat'))
 
     from transaction_db import IMAGE_RECORD_SIZE, IMAGE_HEADER_SIZE
     assert before_size % IMAGE_RECORD_SIZE == 0, \
@@ -317,7 +317,7 @@ def test_image_file_format():
     print(f'  after_image.dat: {after_size} bytes ({after_size // IMAGE_RECORD_SIZE} records)')
 
     # 读取并验证一条记录的头部
-    with open('after_image.dat', 'rb') as f:
+    with open(os.path.join(common_db.DATA_DIR, 'after_image.dat'), 'rb') as f:
         header = f.read(IMAGE_HEADER_SIZE)
         rec_txn_id, rec_table, rec_block_id = struct.unpack('!i20si', header)
         rec_table = rec_table.decode('utf-8').rstrip('\x00')

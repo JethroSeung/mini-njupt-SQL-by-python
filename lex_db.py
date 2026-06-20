@@ -1,8 +1,5 @@
 #-------------------------------
 # lex_db.py
-# author: Jingyu Han hjymail@163.com
-# modified by: Ning Wang, Yidan Xu
-#--------------------------------------------
 #
 # 词法分析模块：将 SQL 字符串拆分为 token 序列
 #

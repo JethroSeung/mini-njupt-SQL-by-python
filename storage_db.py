@@ -1,8 +1,5 @@
 #-----------------------------------------------
 # storage_db.py
-# author: Jingyu Han   hjymail@163.com
-# modified by: Ning Wang, Yidan Xu
-#-----------------------------------------------
 #
 # 表数据(Instance)的磁盘存储与内存管理
 #
@@ -42,7 +39,7 @@
 #   在 struct.unpack 后立即解码为 str。
 #-----------------------------------------------
 
-from common_db import BLOCK_SIZE
+from common_db import BLOCK_SIZE, DATA_DIR
 import struct
 import os
 import ctypes
@@ -83,7 +80,7 @@ class Storage(object):
         self.field_name_list = []   # 字段信息: [(field_name(str), field_type(int), field_length(int)), ...]
         self.open = False
 
-        file_path = tablename + '.dat'
+        file_path = os.path.join(DATA_DIR, tablename + '.dat')
 
         # 若 .dat 文件不存在则创建
         if not os.path.exists(file_path):

@@ -1,8 +1,5 @@
 #------------------------------------------------
 # query_plan_db.py
-# author: Jingyu Han  hjymail@163.com
-# modified by: Ning Wang, Yidan Xu
-#------------------------------------------------
 #
 # 查询计划模块：将语法树转换为查询计划树并执行，以及 DDL/DML 语句的执行
 #
@@ -51,6 +48,7 @@ import schema_db
 import transaction_db
 import itertools
 import os
+from common_db import DATA_DIR
 
 try:
     from rich.console import Console
@@ -742,7 +740,7 @@ def execute_drop_table(schema_obj, stmt_node):
     if schema_obj.find_table(table_name):
         if schema_obj.delete_table_schema(table_name):
             # 3. 删除 .dat 文件
-            file_path = table_name.strip() + '.dat'
+            file_path = os.path.join(DATA_DIR, table_name.strip() + '.dat')
             if os.path.exists(file_path):
                 os.remove(file_path)
                 print(f'Table {table_name} dropped successfully.')

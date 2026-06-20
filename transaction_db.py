@@ -1,7 +1,5 @@
 #------------------------------------------------
 # transaction_db.py
-# author: Ning Wang, Yidan Xu
-#------------------------------------------------
 #
 # 事务管理模块：实现事务持久性保障
 #
@@ -41,7 +39,7 @@
 
 import struct
 import os
-from common_db import BLOCK_SIZE
+from common_db import BLOCK_SIZE, DATA_DIR
 
 # 前像/后像记录的元信息头大小: txn_id(4) + table_name(20) + block_id(4) = 28
 IMAGE_HEADER_SIZE = struct.calcsize('!i20si')
@@ -68,9 +66,9 @@ class TransactionManager(object):
         self.ctt = {}       # 提交事务表: {txn_id: [(table_name, block_id), ...]}
         self.current_txn_id = 0
 
-        self.before_img_path = 'before_image.dat'
-        self.after_img_path = 'after_image.dat'
-        self.log_path = 'transaction.log'
+        self.before_img_path = os.path.join(DATA_DIR, 'before_image.dat')
+        self.after_img_path = os.path.join(DATA_DIR, 'after_image.dat')
+        self.log_path = os.path.join(DATA_DIR, 'transaction.log')
 
         # 如果存在 transaction.log，加载 ATT/CTT
         if os.path.exists(self.log_path):
@@ -169,7 +167,7 @@ class TransactionManager(object):
                 for table_name, block_id in blocks:
                     after_data = self._find_image(self.after_img_path, txn_id, table_name, block_id)
                     if after_data:
-                        dat_path = table_name + '.dat'
+                        dat_path = os.path.join(DATA_DIR, table_name + '.dat')
                         if os.path.exists(dat_path):
                             with open(dat_path, 'rb+') as f:
                                 f.seek(block_id * BLOCK_SIZE)
@@ -184,7 +182,7 @@ class TransactionManager(object):
                 for table_name, block_id in blocks:
                     before_data = self._find_image(self.before_img_path, txn_id, table_name, block_id)
                     if before_data:
-                        dat_path = table_name + '.dat'
+                        dat_path = os.path.join(DATA_DIR, table_name + '.dat')
                         if os.path.exists(dat_path):
                             with open(dat_path, 'rb+') as f:
                                 f.seek(block_id * BLOCK_SIZE)
